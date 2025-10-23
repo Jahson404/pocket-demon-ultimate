@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import talib
 import numpy as np
 from pocketoptionapi import PocketOptionAPI
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -13,7 +12,8 @@ import json
 from datetime import datetime
 import matplotlib.pyplot as plt
 import io
-import polars as pd  # <-- POLARS INSTEAD OF PANDAS
+import polars as pd
+import pandas_ta as ta  # PURE PYTHON INDICATORS
 
 # === CONVERSATION STATES ===
 EMAIL, DEMO_PASS, LIVE_EMAIL, LIVE_PASS = range(4)
@@ -226,7 +226,7 @@ async def pnl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # === /balance ===
-async def balance(update: penddate: Update, context: ContextTypes.DEFAULT_TYPE):
+async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     api = user_apis.get(user_id)
     bal = await api.get_balance() if api else 0
@@ -344,9 +344,9 @@ async def trade_loop(user_id):
                 continue
 
             df = pd.DataFrame(candles)
-            close_prices = df['close'].to_numpy()
-            rsi_values = talib.RSI(close_prices, 14)
-            df = df.with_columns(pd.Series(rsi_values).alias('rsi'))
+            df_pd = df.to_pandas()
+            df_pd['rsi'] = df_pd['close'].ta.rsi(length=14)
+            df = pd.from_pandas(df_pd)
             latest = df[-1]
 
             amount = user['amount']
@@ -424,7 +424,7 @@ async def main():
     await app.start()
     await app.updater.start_polling()
     
-    logging.info("POLARS DEMON ONLINE - $0 FOREVER")
+    logging.info("PANDAS_TA DEMON ONLINE - $0 FOREVER")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
