@@ -1,11 +1,7 @@
-cat > po_demon.py << 'EOF'
 import asyncio
 import logging
-import pandas as pd
 import talib
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import StandardScaler
 from pocketoptionapi import PocketOptionAPI
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, MessageHandler, filters
@@ -17,6 +13,7 @@ import json
 from datetime import datetime
 import matplotlib.pyplot as plt
 import io
+import polars as pd  # <-- POLARS INSTEAD OF PANDAS
 
 # === CONVERSATION STATES ===
 EMAIL, DEMO_PASS, LIVE_EMAIL, LIVE_PASS = range(4)
@@ -25,7 +22,7 @@ EMAIL, DEMO_PASS, LIVE_EMAIL, LIVE_PASS = range(4)
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 ASSETS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'BTCUSD', 'ETHUSD']
 TIMEFRAME = 60
-CANDLE_COUNT = 100
+CANDLE_COUNT = 50
 EXPIRY = 60
 USER_DATA_FILE = 'user_data.json'
 
@@ -69,7 +66,7 @@ class UserDB:
 
 db = UserDB()
 
-# === GLOBAL ===
+# === GLOBALS ===
 user_apis = {}
 user_trading = {}
 user_prices = {}
@@ -220,15 +217,16 @@ def generate_chart(asset):
 async def pnl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = db.get(user_id)
+    rate = user['wins'] / (user['wins'] + user['losses']) * 100 if (user['wins'] + user['losses']) > 0 else 0
     await update.message.reply_text(
         f"<b>P&L</b>\n"
         f"Profit: <b>${user['profit']:.2f}</b>\n"
-        f"Win Rate: <b>{user['wins']/(user['wins']+user['losses'])*100:.1f}%</b>",
+        f"Win Rate: <b>{rate:.1f}%</b>",
         parse_mode='HTML'
     )
 
 # === /balance ===
-async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def balance(update: penddate: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     api = user_apis.get(user_id)
     bal = await api.get_balance() if api else 0
@@ -296,29 +294,116 @@ async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "LAST 10 TRADES:\n" + "\n".join(user['trades'][-10:])
     await update.message.reply_text(text)
 
-# === REGISTRATION (HIDDEN) ===
+# === REGISTRATION ===
 async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Send <b>DEMO EMAIL</b>", parse_mode='HTML')
     return EMAIL
 
-# [get_demo_email, get_demo_pass, etc. — same as before]
+async def get_demo_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['demo_email'] = update.message.text
+    await update.message.reply_text("Send <b>DEMO PASSWORD</b>", parse_mode='HTML')
+    return DEMO_PASS
+
+async def get_demo_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['demo_pass'] = update.message.text
+    await update.message.reply_text("Send <b>LIVE EMAIL</b>", parse_mode='HTML')
+    return LIVE_EMAIL
+
+async def get_live_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['live_email'] = update.message.text
+    await update.message.reply_text("Send <b>LIVE PASSWORD</b>", parse_mode='HTML')
+    return LIVE_PASS
+
+async def get_live_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    data = {
+        'demo_email': context.user_data['demo_email'],
+        'demo_pass': context.user_data['demo_pass'],
+        'live_email': context.user_data['live_email'],
+        'live_pass': update.message.text
+    }
+    db.update(user_id, data)
+    await update.message.reply_text("ACCOUNT LINKED! Use /myaccount")
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Cancelled.")
+    return ConversationHandler.END
+
+# === TRADE LOOP ===
+async def trade_loop(user_id):
+    while user_trading.get(user_id):
+        try:
+            api = user_apis.get(user_id)
+            if not api: break
+            user = db.get(user_id)
+            asset = user['assets'][0]
+            candles = await api.get_candles(asset, TIMEFRAME, CANDLE_COUNT)
+            if not candles or len(candles) < 20:
+                await asyncio.sleep(10)
+                continue
+
+            df = pd.DataFrame(candles)
+            close_prices = df['close'].to_numpy()
+            rsi_values = talib.RSI(close_prices, 14)
+            df = df.with_columns(pd.Series(rsi_values).alias('rsi'))
+            latest = df[-1]
+
+            amount = user['amount']
+            if user['use_percent']:
+                balance = await api.get_balance()
+                amount = max(1, round(balance * user['percent'] / 100, 2))
+
+            direction = None
+            if latest['rsi'] < 30:
+                direction = 1  # CALL
+            elif latest['rsi'] > 70:
+                direction = 0  # PUT
+
+            if direction is not None:
+                trade_id = await api.buy_binary(asset, amount, direction, 1)
+                await asyncio.sleep(EXPIRY + 5)
+                result = await api.check_win(trade_id)
+                if result and result > 0:
+                    user['wins'] += 1
+                    user['profit'] += result
+                else:
+                    user['losses'] += 1
+                db.update(user_id, user)
+            await asyncio.sleep(5)
+        except Exception as e:
+            logging.error(f"Trade error: {e}")
+            await asyncio.sleep(10)
+
+async def start_trading(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id if hasattr(update, 'effective_user') else update.from_user.id
+    if user_trading.get(user_id):
+        await update.message.reply_text("Already trading.")
+        return
+    api = await connect_user(user_id)
+    if not api:
+        await update.message.reply_text("Connect failed. Check /myaccount")
+        return
+    user_trading[user_id] = True
+    asyncio.create_task(trade_loop(user_id))
+    await update.message.reply_text("TRADING STARTED")
 
 # === MAIN ===
 async def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # Registration
     conv = ConversationHandler(
         entry_points=[CommandHandler('register', register)],
-        states={EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_demo_email)], 
-                DEMO_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_demo_pass)],
-                LIVE_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_live_email)],
-                LIVE_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_live_pass)]},
+        states={
+            EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_demo_email)],
+            DEMO_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_demo_pass)],
+            LIVE_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_live_email)],
+            LIVE_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_live_pass)],
+        },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     app.add_handler(conv)
     
-    # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("demo", demo))
     app.add_handler(CommandHandler("live", live))
@@ -339,9 +424,8 @@ async def main():
     await app.start()
     await app.updater.start_polling()
     
-    logging.info("ULTIMATE DEMON ONLINE - $0")
+    logging.info("POLARS DEMON ONLINE - $0 FOREVER")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
-EOF
