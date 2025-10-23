@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import numpy as np
-from pocketoptionapi import PocketOptionAPI
+from pocketoption_api import PocketOptionAPI  # NEW IMPORT
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 import threading
@@ -13,7 +13,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import io
 import polars as pd
-import pandas_ta as ta  # PURE PYTHON INDICATORS
+import pandas_ta as ta
 
 # === CONVERSATION STATES ===
 EMAIL, DEMO_PASS, LIVE_EMAIL, LIVE_PASS = range(4)
@@ -91,8 +91,8 @@ async def connect_user(user_id):
     email = user['demo_email'] if user['mode'] == 'demo' else user['live_email']
     password = user['demo_pass'] if user['mode'] == 'demo' else user['live_pass']
     if not email or not password: return None
-    api = PocketOptionAPI(email=email, password=password, account_type=user['mode'])
-    if await api.connect():
+    api = PocketOptionAPI(email=email, password=password, is_demo=user['mode'] == 'demo')  # NEW SYNTAX
+    if await api.login():
         user_apis[user_id] = api
         return api
     return None
@@ -167,7 +167,7 @@ async def switch_mode(update_or_query, context, mode):
     user_id = update_or_query.from_user.id if hasattr(update_or_query, 'from_user') else update_or_query.message.from_user.id
     db.update(user_id, {'mode': mode})
     if user_id in user_apis:
-        try: await user_apis[user_id].disconnect()
+        try: await user_apis[user_id].logout()
         except: pass
         del user_apis[user_id]
     await (update_or_query.message.reply_text if hasattr(update_or_query, 'message') else update_or_query.edit_message_text)(f"Switched to {mode.upper()}")
@@ -338,7 +338,7 @@ async def trade_loop(user_id):
             if not api: break
             user = db.get(user_id)
             asset = user['assets'][0]
-            candles = await api.get_candles(asset, TIMEFRAME, CANDLE_COUNT)
+            candles = await api.get_candles(asset, TIMEFRAME, CANDLE_COUNT)  # NEW SYNTAX
             if not candles or len(candles) < 20:
                 await asyncio.sleep(10)
                 continue
@@ -361,9 +361,9 @@ async def trade_loop(user_id):
                 direction = 0  # PUT
 
             if direction is not None:
-                trade_id = await api.buy_binary(asset, amount, direction, 1)
+                trade_id = await api.buy_digital_option(asset, amount, direction, EXPIRY)  # NEW SYNTAX
                 await asyncio.sleep(EXPIRY + 5)
-                result = await api.check_win(trade_id)
+                result = await api.get_digital_option_result(trade_id)  # NEW SYNTAX
                 if result and result > 0:
                     user['wins'] += 1
                     user['profit'] += result
@@ -424,7 +424,7 @@ async def main():
     await app.start()
     await app.updater.start_polling()
     
-    logging.info("PANDAS_TA DEMON ONLINE - $0 FOREVER")
+    logging.info("POCKET DEMON ONLINE - $0 FOREVER")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
