@@ -1,11 +1,10 @@
 services:
   - type: web
-    name: pocket-demon
+    name: pocket-demon-ultimate
     env: python
     buildCommand: |
       pip install --upgrade pip
-      pip install --only-binary=:all: -r requirements.txt || \
-      pip install --only-binary=pandas,numpy,matplotlib,scikit-learn -r requirements.txt
+      pip install --no-cache-dir --only-binary=:all: -r requirements.txt
     startCommand: python po_demon.py
     plan: free
     autoDeploy: true
