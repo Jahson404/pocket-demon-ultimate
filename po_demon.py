@@ -92,8 +92,9 @@ async def connect_user(user_id):
     email = user['demo_email'] if user['mode'] == 'demo' else user['live_email']
     password = user['demo_pass'] if user['mode'] == 'demo' else user['live_pass']
     if not email or not password: return None
-    api = PocketOptionAPI(email=email, password=password, is_demo=user['mode'] == 'demo')  # Adjusted for ChipaDev
-    if await api.connect():  # ChipaDev method
+    api = PocketOptionAPI(email=email, password=password, is_demo=user['mode'] == 'demo')
+    if await api.connect():
+        logging.info(f"Connected to Pocket Option for user {user_id}")
         user_apis[user_id] = api
         return api
     return None
@@ -336,12 +337,12 @@ async def trade_loop(user_id):
     while user_trading.get(user_id):
         try:
             api = user_apis.get(user_id)
-            if not api or not await api.is_connected():  # ChipaDev check
+            if not api or not await api.is_connected():
                 api = await connect_user(user_id)
                 if not api: break
             user = db.get(user_id)
             asset = user['assets'][0]
-            candles = await api.get_candles(asset, TIMEFRAME, CANDLE_COUNT)  # ChipaDev method
+            candles = await api.get_candles(asset, TIMEFRAME, CANDLE_COUNT)
             if not candles or len(candles) < 20:
                 await asyncio.sleep(10)
                 continue
@@ -356,7 +357,7 @@ async def trade_loop(user_id):
                 continue
 
             df_pd = df.to_pandas()
-            df_pd['rsi'] = df_pd['close'].ta.rsi(length=14)  # pandas_ta
+            df_pd['rsi'] = ta.rsi(df_pd['close'], length=14)  # Updated for 0.4.71b0
             df = pd.from_pandas(df_pd)
             latest = df[-1]
 
@@ -372,9 +373,9 @@ async def trade_loop(user_id):
                 direction = 0  # PUT
 
             if direction is not None:
-                trade_id = await api.buy_binary(asset, amount, direction, EXPIRY)  # ChipaDev method
+                trade_id = await api.buy_binary(asset, amount, direction, EXPIRY)
                 await asyncio.sleep(EXPIRY + 5)
-                result = await api.check_win(trade_id)  # ChipaDev method
+                result = await api.check_win(trade_id)
                 if result and result > 0:
                     user['wins'] += 1
                     user['profit'] += result
