@@ -3,11 +3,14 @@ services:
     name: pocket-demon-ultimate
     env: python
     buildCommand: |
+      python -m venv venv
+      source venv/bin/activate
       pip install --upgrade pip
       pip install --no-cache-dir --only-binary=:all: -r requirements.txt
-    startCommand: python po_demon.py
+    startCommand: ./venv/bin/python po_demon.py
     plan: free
     autoDeploy: true
     envVars:
       TELEGRAM_BOT_TOKEN:
         fromSecret: TELEGRAM_BOT_TOKEN
+    pythonVersion: "3.12"  # Avoid 3.13 issues
