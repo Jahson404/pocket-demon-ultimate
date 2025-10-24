@@ -1,7 +1,8 @@
-pocketoption-api==0.1.2
+git+https://github.com/ChipaDevTeam/PocketOptionAPI.git
 polars==0.20.31
 numpy==1.26.4
 scikit-learn==1.5.0
 python-telegram-bot==20.8
 matplotlib==3.8.0
 pandas_ta==0.3.14b0
+pytz==2023.3
