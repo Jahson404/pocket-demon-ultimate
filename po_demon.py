@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import numpy as np
-from pocketoptionapi import PocketOptionAPI  # ChipaDev import
+from pocketoptionapi import PocketOptionAPI
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 import threading
@@ -357,7 +357,7 @@ async def trade_loop(user_id):
                 continue
 
             df_pd = df.to_pandas()
-            df_pd['rsi'] = ta.rsi(df_pd['close'], length=14)  # Updated for 0.4.71b0
+            df_pd['rsi'] = ta.rsi(df_pd['close'], length=14)  # Compatible with numpy 2.x
             df = pd.from_pandas(df_pd)
             latest = df[-1]
 
