@@ -357,7 +357,7 @@ async def trade_loop(user_id):
                 continue
 
             df_pd = df.to_pandas()
-            df_pd['rsi'] = ta.rsi(df_pd['close'], length=14)  # Compatible with numpy 2.x
+            df_pd['rsi'] = df_pd.ta.rsi(length=14)  # Compatible with older pandas_ta
             df = pd.from_pandas(df_pd)
             latest = df[-1]
 
