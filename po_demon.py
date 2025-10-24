@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import numpy as np
-from pocketoption_api import PocketOptionAPI  # NEW IMPORT
+from pocketoptionapi import PocketOptionAPI  # ChipaDev import
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 import threading
@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import io
 import polars as pd
 import pandas_ta as ta
+from pytz import timezone
 
 # === CONVERSATION STATES ===
 EMAIL, DEMO_PASS, LIVE_EMAIL, LIVE_PASS = range(4)
@@ -91,8 +92,8 @@ async def connect_user(user_id):
     email = user['demo_email'] if user['mode'] == 'demo' else user['live_email']
     password = user['demo_pass'] if user['mode'] == 'demo' else user['live_pass']
     if not email or not password: return None
-    api = PocketOptionAPI(email=email, password=password, is_demo=user['mode'] == 'demo')  # NEW SYNTAX
-    if await api.login():
+    api = PocketOptionAPI(email=email, password=password, is_demo=user['mode'] == 'demo')  # Adjusted for ChipaDev
+    if await api.connect():  # ChipaDev method
         user_apis[user_id] = api
         return api
     return None
@@ -167,7 +168,7 @@ async def switch_mode(update_or_query, context, mode):
     user_id = update_or_query.from_user.id if hasattr(update_or_query, 'from_user') else update_or_query.message.from_user.id
     db.update(user_id, {'mode': mode})
     if user_id in user_apis:
-        try: await user_apis[user_id].logout()
+        try: await user_apis[user_id].disconnect()
         except: pass
         del user_apis[user_id]
     await (update_or_query.message.reply_text if hasattr(update_or_query, 'message') else update_or_query.edit_message_text)(f"Switched to {mode.upper()}")
@@ -335,17 +336,27 @@ async def trade_loop(user_id):
     while user_trading.get(user_id):
         try:
             api = user_apis.get(user_id)
-            if not api: break
+            if not api or not await api.is_connected():  # ChipaDev check
+                api = await connect_user(user_id)
+                if not api: break
             user = db.get(user_id)
             asset = user['assets'][0]
-            candles = await api.get_candles(asset, TIMEFRAME, CANDLE_COUNT)  # NEW SYNTAX
+            candles = await api.get_candles(asset, TIMEFRAME, CANDLE_COUNT)  # ChipaDev method
             if not candles or len(candles) < 20:
                 await asyncio.sleep(10)
                 continue
 
             df = pd.DataFrame(candles)
+            df['time'] = pd.to_datetime(df['time'], unit='s')
+            latest_time = df['time'].max()
+            now = datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(timezone('Africa/Lagos'))
+            if (now - latest_time).total_seconds() > 60:
+                logging.warning(f"Stale data for {asset}: {latest_time} vs {now}")
+                await asyncio.sleep(10)
+                continue
+
             df_pd = df.to_pandas()
-            df_pd['rsi'] = df_pd['close'].ta.rsi(length=14)
+            df_pd['rsi'] = df_pd['close'].ta.rsi(length=14)  # pandas_ta
             df = pd.from_pandas(df_pd)
             latest = df[-1]
 
@@ -361,9 +372,9 @@ async def trade_loop(user_id):
                 direction = 0  # PUT
 
             if direction is not None:
-                trade_id = await api.buy_digital_option(asset, amount, direction, EXPIRY)  # NEW SYNTAX
+                trade_id = await api.buy_binary(asset, amount, direction, EXPIRY)  # ChipaDev method
                 await asyncio.sleep(EXPIRY + 5)
-                result = await api.get_digital_option_result(trade_id)  # NEW SYNTAX
+                result = await api.check_win(trade_id)  # ChipaDev method
                 if result and result > 0:
                     user['wins'] += 1
                     user['profit'] += result
